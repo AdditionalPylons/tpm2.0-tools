@@ -70,6 +70,7 @@ typedef struct {
 TPMS_AUTH_COMMAND sessionData;
 bool hexPasswd = false;
 char outFilePath[PATH_MAX];
+TPM2B_DATA qualifedData = {};
 
 void PrintBuffer( UINT8 *buffer, UINT32 size )
 {
@@ -258,8 +259,16 @@ int quote(TPM_HANDLE akHandle, PCR_LIST pcrList, TPMI_ALG_HASH algorithmId)
         }
     }
 
-    qualifyingData.t.size = sizeof( qualDataString );
-    memcpy( &qualifyingData.t.buffer[0], qualDataString, sizeof( qualDataString ) );
+    if(!qualifedData.t.size)
+    {
+      qualifyingData.t.size = sizeof( qualDataString );
+      memcpy( &qualifyingData.t.buffer[0], qualDataString, sizeof( qualDataString ) );
+    }
+    else
+    {
+      qualifyingData = qualifedData; // shallow copy ok since there are no pointers
+    }
+
 
     inScheme.scheme = TPM_ALG_NULL;
 
@@ -330,6 +339,7 @@ void showHelp(const char *name)
             "-P, --akPassword <akPassword> AK handle's Password\n"
             "-l, --idList  <num1,...,numN> The list of selected PCR's id, 0~23\n"
             "-g, --algorithm <hexAlg>      The algorithm id\n"
+            "-q, --qualifiedData <file>    User defined data (optional: typically used as a nonce)"
             "-o, --outFile<filePath>       output file path, recording the two structures output by tpm2_quote function\n"
             "-X, --passwdInHex             passwords given by any options are hex format.\n"
             "-p, --port    <port number>   The Port number, default is %d, optional\n"
@@ -345,10 +355,11 @@ void showHelp(const char *name)
             "quote the selected PCR values:\n"
             "\t %s -k 0x80000001 -P abc123 -g 0x4 -l 16,17,18 -o outFile001\n"
             "\t %s -c ak.context -P abc123 -g 0x4 -l 16,17,18 -o outFile001\n"
+            "\t %s -k 0x80000001 -P abc123 -g 0x4 -l 16,17,18 -q random.nonce -o outFile001\n"
             "\t %s -k 0x80000001 -g 0x4 -l 16,17,18 -o outFile001 \n\n"
             "\t %s -c ak.context -g 0x4 -l 16,17,18 -o outFile001 \n\n"
             "\t %s -k 0x80000001 -P 123abc -X -g 0x4 -l 16,17,18 -o outFile001\n"
-            , name, DEFAULT_RESMGR_TPM_PORT, name, name, name, name, name, name, name);
+            , name, DEFAULT_RESMGR_TPM_PORT, name, name, name, name, name, name, name, name);
 }
 
 int parseList(const char *arg, PCR_LIST *pcrList)
@@ -430,7 +441,7 @@ int main(int argc, char *argv[])
     setvbuf (stdout, NULL, _IONBF, BUFSIZ);
 
     int opt = -1;
-    const char *optstring = "hvk:c:P:l:g:o:Xp:d:";
+    const char *optstring = "hvk:c:P:l:q:g:o:Xp:d:";
     static struct option long_options[] = {
         {"help",0,NULL,'h'},
         {"version",0,NULL,'v'},
@@ -439,6 +450,7 @@ int main(int argc, char *argv[])
         {"akPassword",1,NULL,'P'},  //add ak auth
         {"idList",1,NULL,'l'},
         {"algorithm",1,NULL,'g'},
+        {"qualifiedData",1,NULL,'q'},
         {"outFile",1,NULL,'o'},
         {"passwdInHex",0,NULL,'X'},
         {"port",1,NULL,'p'},
@@ -460,6 +472,7 @@ int main(int argc, char *argv[])
         P_flag = 0,
         l_flag = 0,
         g_flag = 0,
+        q_flag = 0,
         o_flag = 0;
 
     if(argc == 1)
@@ -523,11 +536,20 @@ int main(int argc, char *argv[])
             }
             g_flag = 1;
             break;
+        case 'q':
+            qualifedData.t.size = sizeof(qualifedData.t.buffer);
+            if(loadDataFromFile(optarg, qualifedData.t.buffer, &qualifedData.t.size) != 0)
+            {
+              returnVal = -6;
+              break;
+            }
+            q_flag = 1;
+            break;
         case 'o':
             safeStrNCpy(outFilePath, optarg, sizeof(outFilePath));
             if(checkOutFile(outFilePath) != 0)
             {
-                returnVal = -6;
+                returnVal = -7;
                 break;
             }
             o_flag = 1;
@@ -539,23 +561,23 @@ int main(int argc, char *argv[])
             if( getPort(optarg, &port) )
             {
                 printf("Incorrect port number.\n");
-                returnVal = -7;
+                returnVal = -8;
             }
             break;
         case 'd':
             if( getDebugLevel(optarg, &debugLevel) )
             {
                 printf("Incorrect debug level.\n");
-                returnVal = -8;
+                returnVal = -9;
             }
             break;
        case ':':
             //              printf("Argument %c needs a value!\n",optopt);
-            returnVal = -9;
+            returnVal = -10;
             break;
         case '?':
             //              printf("Unknown Argument: %c\n",optopt);
-            returnVal = -10;
+            returnVal = -11;
             break;
             //default:
             //  break;
@@ -577,7 +599,7 @@ int main(int argc, char *argv[])
         else
         {
             showArgMismatch(argv[0]);
-            return -11;
+            return -12;
         }
     }
     else if(flagCnt == 4 && ((k_flag || c_flag) && l_flag && g_flag && o_flag))
@@ -595,7 +617,7 @@ int main(int argc, char *argv[])
         finishTest();
 
         if(returnVal)
-            return -12;
+            return -13;
     }
     else
     {
